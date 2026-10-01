@@ -3,13 +3,15 @@
 // 适配参考：jinshengchan/huangguo-fongmi、cluntop/tvbox(huangguo.py / huangguo2.py)
 //
 // 设计要点：
-// 1. 官方 JSON 接口优先（/api/videos/category、/api/ranks、/api/videos/{id}、/api/topics、/api/search），
-//    HTML 抓取仅作兜底 —— 官方接口含分页元数据、评分、标签，比正则可靠。
+// 1. 官方 JSON 接口优先（/api/videos/category、/api/ranks、/api/videos/{id}、/api/videos/{id}/play、/api/topics、/api/search），
+//    HTML 抓取仅作兜底 —— 官方接口含分页元数据、评分、标签、时长，比正则可靠。
 // 2. 封面为 AES-CBC 加密的**原始二进制**（非 base64 文本），须按二进制解密后校验图片魔数。
 // 3. m3u8 为 AES-128 加密切片，通过 /raw 代理重写分片与密钥 URI，保证继续走本 Worker。
 // 4. 浏览器 <video> 原生不支持 HLS，播放器库由 /hls.js 代理提供。
 // 5. 名称统一：剥离 sr-only 辅助文本与站点后缀，剧集标题一律规范为「第N集」。
 // 6. 列表解析一律**按容器块边界**切分（不再使用字符窗口），避免跨卡片串行污染。
+// 7. 播放解析优先用官方 /api/videos/{id}/play，并**对比声明时长与实际 m3u8 时长**，
+//    当源站只下发占位/预览片段时以 incomplete 标记返回，供前端如实提示（而非误判为解析失败）。
 
 const SITE = 'https://huangguoai.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
@@ -67,7 +69,6 @@ function stripTags(s) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
 }
-// 统一名称：去 sr-only、去站点后缀、去「黄果吃瓜侠·日期·分类」前缀、折叠空白
 function cleanTitle(s) {
   let t = stripTags(stripSrOnly(s));
   t = t.replace(/全集在线观看/g, '');
@@ -476,28 +477,67 @@ async function hlsLib() {
   }
   return new Response('/* hls.js unavailable */', { status: 502, headers: { ...CORS, 'content-type': 'application/javascript' } });
 }
+function m3u8Info(text) {
+  let sec = 0;
+  const re = /#EXTINF:([\d.]+)/g;
+  let m;
+  while ((m = re.exec(text))) sec += parseFloat(m[1]);
+  return {
+    duration: Math.round(sec * 10) / 10,
+    segments: (text.match(/#EXTINF/g) || []).length,
+    key: (text.match(/EXT-X-KEY:METHOD=([A-Z0-9-]+)/i) || [])[1] || '',
+    master: /EXT-X-STREAM-INF/i.test(text)
+  };
+}
+
+// 播放解析：官方 /api/videos/{id}/play 优先，页面 videoInitialData 兜底；
+// 并探测真实流时长以识别源站占位/预览片段
 async function play(page, ep) {
-  const html = await getHtml(page);
-  const m = html.match(/id=["']videoInitialData["'][^>]*>([\s\S]*?)<\/script>/i);
+  const id = (String(page || '').match(/\/video\/(\d+)/) || String(page || '').match(/^(\d+)$/) || [])[1] || '';
+  const epNum = String(ep || '1');
   let stream = '';
-  if (m) {
-    try {
-      const d = JSON.parse(m[1]);
-      stream = (d.epPlaySrcs && d.epPlaySrcs[ep]) || d.videoSrc || '';
-    } catch (e) {}
-  }
-  if (!stream) {
-    const id = (page.match(/\/video\/(\d+)/) || [])[1];
-    if (id) {
-      const api = await getJson(SITE + '/api/videos/' + id);
-      if (api && api.data) stream = api.data.video_url || '';
+  let declared = 0;
+  let title = '';
+  let source = 'page';
+
+  if (id) {
+    const api = await getJson(SITE + '/api/videos/' + id + '/play?ep=' + encodeURIComponent(epNum));
+    if (api && api.data && api.data.video_url) {
+      stream = String(api.data.video_url || '');
+      declared = Number(api.data.duration) || 0;
+      title = api.data.title || '';
+      source = 'api';
     }
   }
   if (!stream) {
-    const mm = html.match(/https?:\/\/[^"'<>\s]+?\.(?:m3u8|mp4)(?:\?[^"'<>\s]*)?/i);
-    if (mm) stream = mm[0];
+    const html = await getHtml(page);
+    const m = html.match(/id=["']videoInitialData["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (m) {
+      try {
+        const d = JSON.parse(m[1]);
+        stream = (d.epPlaySrcs && d.epPlaySrcs[epNum]) || d.videoSrc || '';
+        if (!declared) declared = Number(d.duration) || 0;
+      } catch (e) {}
+    }
+    if (!stream) {
+      const mm = html.match(/https?:\/\/[^"'<>\s]+?\.(?:m3u8|mp4)(?:\?[^"'<>\s]*)?/i);
+      if (mm) stream = mm[0];
+    }
   }
-  return stream.replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+  stream = String(stream).replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+
+  let probe = null;
+  let incomplete = false;
+  if (stream && /\.m3u8/i.test(stream)) {
+    try {
+      const r = await fetch(stream, { headers: { 'User-Agent': UA, 'Referer': SITE + '/' } });
+      if (r.ok) {
+        probe = m3u8Info(await r.text());
+        if (declared && probe.duration && probe.duration < declared * 0.8) incomplete = true;
+      }
+    } catch (e) {}
+  }
+  return { id, ep: epNum, stream, declared, title, source, probe, incomplete };
 }
 
 async function handle(request) {
@@ -537,8 +577,20 @@ async function handle(request) {
     if (p.indexOf('/search/') === 0) return json(await search(decodeURIComponent(p.split('/')[2] || ''), page, size));
     if (p.indexOf('/detail/') === 0) return json(await detail(p.split('/')[2] || ''));
     if (p === '/play') {
-      const stream = await play(decodeURIComponent(url.searchParams.get('url') || ''), url.searchParams.get('ep') || '1');
-      return json({ url: stream, proxy: stream ? origin + '/raw?url=' + encodeURIComponent(stream) : '' });
+      const info = await play(decodeURIComponent(url.searchParams.get('url') || ''), url.searchParams.get('ep') || '1');
+      return json({
+        url: info.stream,
+        proxy: info.stream ? origin + '/raw?url=' + encodeURIComponent(info.stream) : '',
+        id: info.id,
+        ep: info.ep,
+        title: info.title,
+        source: info.source,
+        declaredDuration: info.declared,
+        actualDuration: info.probe ? info.probe.duration : 0,
+        segments: info.probe ? info.probe.segments : 0,
+        keyMethod: info.probe ? info.probe.key : '',
+        incomplete: info.incomplete
+      });
     }
     if (p === '/recommend') return json(await category('ai-duanju', 'latest', 1, 20));
     return json(await category(p.replace(/^\//, '').replace(/\/$/, '') || 'ai-duanju', sort, page, size));
