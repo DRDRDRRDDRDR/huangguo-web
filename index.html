@@ -8,73 +8,166 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="mark">黄</span><div><strong>黄果解析</strong><small>短剧 · 漫剧 · AI 内容</small></div></div>
-  <a href="https://huangguoai.com" target="_blank" rel="noreferrer">访问官方站 ↗</a>
+  <div class="brand"><span class="mark">黄</span><div><strong>黄果解析</strong><small>短剧 · 漫剧 · 换脸 · 魔改 · 吃瓜</small></div></div>
+  <div class="top-actions">
+    <a href="https://huangguoai.com" target="_blank" rel="noreferrer">官方站 ↗</a>
+    <a href="https://github.com/DRDRDRRDDRDR/huangguo-web" target="_blank" rel="noreferrer">源码 ↗</a>
+  </div>
 </header>
+
 <main>
   <section class="hero">
-    <div class="eyebrow">HUANGGUO / FONGMI ADAPTER</div>
+    <div class="eyebrow">HUANGGUO / FONGMI ADAPTER · 全接口</div>
     <h1>发现下一部<br><em>想看的短剧。</em></h1>
-    <p>基于 huangguo-fongmi 适配逻辑，快速检索、查看剧集并直接播放。</p>
+    <p>基于 huangguo-fongmi 适配逻辑与黄果官方 JSON 接口，覆盖分类、排行榜、话题、吃瓜、搜索、详情与播放。</p>
     <form id="search">
-      <input id="keyword" placeholder="搜索剧名，例如：霸总、重生、逆袭" autocomplete="off">
+      <input id="keyword" placeholder="搜索剧名，例如：东京、母子、换脸" autocomplete="off">
       <button>搜索</button>
     </form>
-    <div class="quick">
-      <button data-q="热门">热门</button>
-      <button data-q="AI短剧">AI短剧</button>
-      <button data-q="AI漫剧">AI漫剧</button>
-      <button data-q="AI换脸">AI换脸</button>
+    <div class="quick" id="quick">
+      <button data-q="东京">东京</button>
+      <button data-q="母子">母子</button>
+      <button data-q="换脸">换脸</button>
+      <button data-q="魔改">魔改</button>
     </div>
   </section>
-  <section class="toolbar">
-    <div><span class="section-label">精选内容</span><h2 id="heading">正在加载</h2></div>
-    <div class="tabs" id="tabs">
-      <button class="active" data-path="/">首页</button>
-      <button data-path="/ai-duanju/">AI短剧</button>
-      <button data-path="/ai-manju/">AI漫剧</button>
-      <button data-path="/ai-huanlian/">AI换脸</button>
-      <button data-path="/ranks/hot/">排行榜</button>
+
+  <nav class="section-nav" id="section-nav">
+    <a href="#sec-recommend">精选推荐</a>
+    <a href="#sec-category">分类</a>
+    <a href="#sec-ranks">排行榜</a>
+    <a href="#sec-topics">话题精选</a>
+    <a href="#sec-chigua">黄果吃瓜</a>
+    <a href="#sec-api">接口列表</a>
+  </nav>
+
+  <section class="panel" id="sec-category">
+    <div class="panel-head">
+      <div><span class="section-label">CATEGORY · 分类</span><h2>全部分类</h2></div>
+      <div class="chips" id="cat-tabs"></div>
     </div>
+    <div class="chips sub" id="sort-tabs"></div>
+    <div id="status" class="status">正在连接黄果源站…</div>
+    <section id="grid" class="grid"></section>
+    <div class="pager" id="pager"></div>
   </section>
-  <div id="status" class="status">正在连接黄果源站…</div>
-  <section id="grid" class="grid"></section>
+
+  <section class="panel" id="sec-recommend">
+    <div class="panel-head"><div><span class="section-label">FEED · 精选推荐</span><h2>最新更新</h2></div></div>
+    <section id="grid-recommend" class="grid"></section>
+  </section>
+
+  <section class="panel" id="sec-ranks">
+    <div class="panel-head">
+      <div><span class="section-label">RANKS · 排行榜</span><h2>榜单</h2></div>
+      <div class="chips" id="rank-tabs"></div>
+    </div>
+    <section id="grid-ranks" class="grid"></section>
+  </section>
+
+  <section class="panel" id="sec-topics">
+    <div class="panel-head"><div><span class="section-label">TOPICS · 话题精选</span><h2>专辑专题</h2></div></div>
+    <section id="grid-topics" class="grid"></section>
+  </section>
+
+  <section class="panel" id="sec-chigua">
+    <div class="panel-head">
+      <div><span class="section-label">CHIGUA · 黄果吃瓜</span><h2>吃瓜内容</h2></div>
+      <div class="chips" id="chigua-tabs"></div>
+    </div>
+    <section id="grid-chigua" class="grid"></section>
+  </section>
+
+  <section class="panel" id="sec-api">
+    <div class="panel-head"><div><span class="section-label">API · 接口列表</span><h2>可用接口</h2></div></div>
+    <div class="api-list" id="api-list"></div>
+  </section>
 </main>
+
 <dialog id="detail">
   <button class="close" id="close">×</button>
   <div id="detail-content"></div>
 </dialog>
+
 <footer>内容来自公开站点，仅作技术演示。请遵守当地法律法规与版权规则。</footer>
+
 <script src="https://huangguo-parser.13681235735.workers.dev/hls.js"></script>
 <script>
 const API_BASE='https://huangguo-parser.13681235735.workers.dev';
-const $=s=>document.querySelector(s),grid=$('#grid'),status=$('#status');
+const $=s=>document.querySelector(s);
 let hlsPlayer=null;
+let STATE={cat:'ai-duanju',sort:'latest',page:1,pages:1,rank:'hot',chigua:'all'};
+
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(path){const r=await fetch(API_BASE+'/api'+path);if(!r.ok)throw Error('请求失败');return r.json()}
-function render(list){
-  grid.innerHTML=list.length?list.map(x=>`<article class="card" data-id="${esc(x.vod_id)}"><div class="cover">${x.vod_pic?`<img src="${API_BASE}${x.vod_pic}" loading="lazy" alt="${esc(x.vod_name)}">`:'<span>黄果</span>'}</div><div class="card-body"><h3>${esc(x.vod_name)}</h3><p>${esc(x.vod_remarks||'黄果短剧')}</p></div></article>`).join(''):'<div class="empty">暂无结果，试试换个关键词。</div>';
-  grid.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+async function api(path){const r=await fetch(API_BASE+'/api'+path);if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
+
+function cardHtml(x){
+  const pic=x.vod_pic?`<img src="${API_BASE}${esc(x.vod_pic)}" loading="lazy" alt="${esc(x.vod_name)}">`:'<span>黄果</span>';
+  const score=x.vod_score?`<i class="score">${esc(String(x.vod_score))}</i>`:'';
+  return `<article class="card" data-id="${esc(x.vod_id)}"><div class="cover">${pic}${score}</div><div class="card-body"><h3>${esc(x.vod_name)}</h3><p>${esc(x.vod_remarks||'黄果短剧')}</p></div></article>`;
 }
-async function load(path='/',title='正在更新'){
-  status.textContent='加载中…';$('#heading').textContent=title;
-  try{const d=await api(path);render(d.list||[]);status.textContent=`共 ${d.list?.length||0} 部`;}
-  catch(e){status.textContent='源站暂时不可用，请稍后重试。';grid.innerHTML=''}
+function fill(el,list,empty){
+  el.innerHTML=list&&list.length?list.map(cardHtml).join(''):`<div class="empty">${esc(empty||'暂无内容')}</div>`;
+  el.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 }
+
+async function loadCategory(page){
+  STATE.page=page||1;
+  const st=$('#status');st.textContent='加载中…';
+  try{
+    const d=await api('/category/'+STATE.cat+'?page='+STATE.page+'&size=24&sort='+STATE.sort);
+    fill($('#grid'),d.list||[],'该分类暂无内容');
+    STATE.pages=d.pagecount||1;
+    st.textContent=`共 ${d.total||0} 部 · 第 ${d.page||1}/${STATE.pages} 页 · 数据源 ${d.source||'-'}`;
+    $('#pager').innerHTML=`<button ${STATE.page<=1?'disabled':''} data-p="${STATE.page-1}">上一页</button><span>第 ${STATE.page} / ${STATE.pages} 页</span><button ${STATE.page>=STATE.pages?'disabled':''} data-p="${STATE.page+1}">下一页</button>`;
+    $('#pager').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(!b.disabled)loadCategory(Number(b.dataset.p));window.scrollTo({top:$('#sec-category').offsetTop-70,behavior:'smooth'})});
+  }catch(e){st.textContent='源站暂时不可用，请稍后重试。';$('#grid').innerHTML=''}
+}
+
+async function loadRecommend(){
+  try{const d=await api('/category/ai-duanju?page=1&size=12&sort=latest');fill($('#grid-recommend'),d.list||[]);}catch(e){$('#grid-recommend').innerHTML='<div class="empty">加载失败</div>'}
+}
+async function loadRanks(type){
+  STATE.rank=type||'hot';
+  try{const d=await api('/ranks/'+STATE.rank+'?page=1&size=12');fill($('#grid-ranks'),d.list||[]);}catch(e){$('#grid-ranks').innerHTML='<div class="empty">加载失败</div>'}
+}
+async function loadTopics(){
+  try{const d=await api('/topics');fill($('#grid-topics'),d.list||[]);}catch(e){$('#grid-topics').innerHTML='<div class="empty">加载失败</div>'}
+}
+async function loadChigua(cate){
+  STATE.chigua=cate||'all';
+  try{const d=await api('/chigua?cate='+STATE.chigua+'&page=1&size=12');fill($('#grid-chigua'),d.list||[]);}catch(e){$('#grid-chigua').innerHTML='<div class="empty">加载失败</div>'}
+}
+async function loadSearch(q){
+  const st=$('#status');$('#sec-category').scrollIntoView({behavior:'smooth'});
+  st.textContent='搜索中…';
+  try{
+    const d=await api('/search/'+encodeURIComponent(q)+'?page=1&size=24');
+    fill($('#grid'),d.list||[],'没有找到相关结果');
+    $('#pager').innerHTML='';
+    st.textContent=`搜索「${q}」共 ${d.total||0} 条 · 数据源 ${d.source||'-'}`;
+  }catch(e){st.textContent='搜索失败，请稍后重试。'}
+}
+
 function destroyPlayer(){if(hlsPlayer){try{hlsPlayer.destroy()}catch(e){}hlsPlayer=null}}
 async function openDetail(id){
   const d=$('#detail'),box=$('#detail-content');
   d.showModal();box.innerHTML='<div class="loading">正在读取剧集…</div>';
+  if(/^topic_/.test(id)){
+    const slug=id.replace('topic_','');
+    try{const x=await api('/topics?slug='+encodeURIComponent(slug)+'&size=48');box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">话题专辑</div><h2>${esc(slug)}</h2><p>共 ${x.total||0} 部</p></div></div><div class="grid mini">${(x.list||[]).map(cardHtml).join('')}</div>`;box.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));}catch(e){box.innerHTML='<div class="empty">话题读取失败。</div>'}
+    return;
+  }
   try{
     const x=(await api('/detail/'+id)).list?.[0];
     if(!x)throw Error();
-    box.innerHTML=`<div class="detail-head">${x.vod_pic?`<img src="${API_BASE}${x.vod_pic}" alt="${esc(x.vod_name)}">`:''}<div><div class="eyebrow">黄果短剧</div><h2>${esc(x.vod_name)}</h2><p>选择集数开始播放</p></div></div><div class="episodes">${(x.episodes||[]).map(e=>`<button data-url="${encodeURIComponent(e.url)}" data-ep="${e.ep}">第${e.ep}集</button>`).join('')}</div><div id="player"></div>`;
+    const meta=[x.vod_year,x.vod_score?x.vod_score+'分':'',x.vod_episode_count?x.vod_episode_count+'集':'',x.vod_finished?'已完结':'连载中',x.vod_original?'独家原创':''].filter(Boolean).join(' · ');
+    box.innerHTML=`<div class="detail-head">${x.vod_pic?`<img src="${API_BASE}${esc(x.vod_pic)}" alt="${esc(x.vod_name)}">`:''}<div><div class="eyebrow">${esc(meta||'黄果短剧')}</div><h2>${esc(x.vod_name)}</h2><p>${esc(x.vod_desc||'选择集数开始播放')}</p>${(x.vod_tags||[]).length?`<div class="tags">${x.vod_tags.map(t=>`<span>${esc(t)}</span>`).join('')}</div>`:''}</div></div><div class="episodes">${(x.episodes||[]).map(e=>`<button data-url="${encodeURIComponent(e.url)}" data-ep="${e.ep}">${esc(e.title||('第'+e.ep+'集'))}</button>`).join('')}</div><div id="player"></div>`;
     box.querySelectorAll('.episodes button').forEach(b=>b.onclick=()=>play(b.dataset.url,b.dataset.ep));
   }catch(e){box.innerHTML='<div class="empty">详情读取失败。</div>'}
 }
 async function play(url,ep){
-  const p=$('#player');
-  destroyPlayer();
+  const p=$('#player');destroyPlayer();
   p.innerHTML='<div class="loading">正在解析第'+ep+'集…</div>';
   try{
     const d=await api('/play?url='+url+'&ep='+ep);
@@ -84,30 +177,56 @@ async function play(url,ep){
     const video=$('#video');
     if(window.Hls&&window.Hls.isSupported()){
       hlsPlayer=new window.Hls({lowLatencyMode:false});
-      hlsPlayer.loadSource(src);
-      hlsPlayer.attachMedia(video);
+      hlsPlayer.loadSource(src);hlsPlayer.attachMedia(video);
       hlsPlayer.on(window.Hls.Events.ERROR,function(_e,data){
-        if(data&&data.fatal){
-          const el=$('#player');
-          if(el)el.innerHTML='<div class="error">播放失败：'+esc(data.details||'未知错误')+'</div>';
-          destroyPlayer();
-        }
+        if(data&&data.fatal){const el=$('#player');if(el)el.innerHTML='<div class="error">播放失败：'+esc(data.details||'未知错误')+'</div>';destroyPlayer();}
       });
-    }else if(video.canPlayType('application/vnd.apple.mpegurl')){
-      video.src=src;
-    }else{
-      p.innerHTML='<div class="error">当前浏览器不支持 HLS 播放。</div>';
-    }
-  }catch(e){
-    p.innerHTML='<div class="error">播放地址解析失败，请换一集重试。</div>';
-  }
+    }else if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=src;}
+    else{p.innerHTML='<div class="error">当前浏览器不支持 HLS 播放。</div>';}
+  }catch(e){p.innerHTML='<div class="error">播放地址解析失败，请换一集重试。</div>'}
 }
-$('#search').onsubmit=e=>{e.preventDefault();const q=$('#keyword').value.trim();if(q)load('/search/'+encodeURIComponent(q)+'/','搜索：'+q)};
-$('#tabs').onclick=e=>{if(e.target.matches('button')){$('#tabs .active').classList.remove('active');e.target.classList.add('active');load(e.target.dataset.path,e.target.textContent)}};
-document.querySelectorAll('.quick button').forEach(b=>b.onclick=()=>{$('#keyword').value=b.dataset.q;$('#search').requestSubmit()});
-$('#close').onclick=()=>{destroyPlayer();$('#detail').close()};
-$('#detail').addEventListener('close',destroyPlayer);
-load();
+
+function chips(el,items,activeKey,onPick){
+  el.innerHTML=items.map(i=>`<button class="${i.v===activeKey?'active':''}" data-v="${esc(i.v)}">${esc(i.n)}</button>`).join('');
+  el.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    el.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');onPick(b.dataset.v);
+  });
+}
+
+const API_DOCS=[
+  ['GET','/api/','服务状态 + 分类与排序枚举'],
+  ['GET','/api/categories','分类、排序、榜单、吃瓜枚举'],
+  ['GET','/api/all','首页聚合（推荐+榜单+话题+吃瓜）'],
+  ['GET','/api/category/{tid}?page&size&sort','分类列表，tid=ai-duanju/ai-manju/ai-huanlian/ai-mogai'],
+  ['GET','/api/ranks/{type}?page&size','排行榜，type=hot/recommend/potential'],
+  ['GET','/api/topics','话题专辑列表'],
+  ['GET','/api/topics?slug={slug}&size','话题专辑内视频'],
+  ['GET','/api/chigua?cate&page&size','黄果吃瓜，cate=all/remen/yuanchuang'],
+  ['GET','/api/search/{关键词}?page&size','搜索'],
+  ['GET','/api/detail/{id}','详情 + 剧集列表'],
+  ['GET','/api/play?url&ep','解析 m3u8 播放地址'],
+  ['GET','/media?url','封面解密代理'],
+  ['GET','/raw?url','HLS 分片与密钥代理'],
+  ['GET','/hls.js','播放器库代理']
+];
+
+async function init(){
+  let meta={categories:[],sorts:[]};
+  try{meta=await api('/categories')}catch(e){}
+  const cats=meta.categories&&meta.categories.length?meta.categories:[{type_id:'ai-duanju',type_name:'AI成人短剧'}];
+  const sorts=meta.sorts&&meta.sorts.length?meta.sorts:[{n:'最新更新',v:'latest'}];
+  chips($('#cat-tabs'),cats.map(c=>({n:c.type_name,v:c.type_id})),STATE.cat,v=>{STATE.cat=v;loadCategory(1)});
+  chips($('#sort-tabs'),sorts.map(s=>({n:s.n,v:s.v})),STATE.sort,v=>{STATE.sort=v;loadCategory(1)});
+  chips($('#rank-tabs'),[{n:'热播榜',v:'hot'},{n:'推荐榜',v:'recommend'},{n:'潜力榜',v:'potential'}],STATE.rank,v=>loadRanks(v));
+  chips($('#chigua-tabs'),[{n:'全部',v:'all'},{n:'热门吃瓜',v:'remen'},{n:'AI原创',v:'yuanchuang'}],STATE.chigua,v=>loadChigua(v));
+  $('#api-list').innerHTML=API_DOCS.map(d=>`<div class="api-row"><span class="m">${d[0]}</span><code>${esc(d[1])}</code><span class="d">${esc(d[2])}</span></div>`).join('');
+  $('#search').onsubmit=e=>{e.preventDefault();const q=$('#keyword').value.trim();if(q)loadSearch(q)};
+  $('#quick').onclick=e=>{if(e.target.matches('button')){$('#keyword').value=e.target.dataset.q;$('#search').requestSubmit()}};
+  $('#close').onclick=()=>{destroyPlayer();$('#detail').close()};
+  $('#detail').addEventListener('close',destroyPlayer);
+  loadCategory(1);loadRecommend();loadRanks('hot');loadTopics();loadChigua('all');
+}
+init();
 </script>
 </body>
 </html>
