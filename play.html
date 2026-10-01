@@ -10,10 +10,13 @@
 <body class="play-body">
 <header class="topbar">
   <div class="brand"><a class="mark" href="index.html">黄</a><div><a class="home-link" href="index.html"><strong>黄果解析</strong></a><small>播放页</small></div></div>
-  <div class="top-actions">
-    <a href="https://huangguoai.com" target="_blank" rel="noreferrer">官方站 ↗</a>
-    <a href="index.html">← 返回首页</a>
-  </div>
+  <nav class="top-nav">
+    <a href="index.html">全部剧集</a>
+    <a href="ranks.html">排行榜</a>
+    <a href="topics.html">专辑专题</a>
+    <a href="chigua.html">黄果吃瓜</a>
+    <a href="api.html">接口</a>
+  </nav>
 </header>
 
 <main class="play-main">
@@ -30,6 +33,7 @@
         <a id="btn-source" class="ghost" href="#" target="_blank" rel="noreferrer">原始地址 ↗</a>
       </div>
     </div>
+    <div id="warn"></div>
     <div class="player-status" id="player-status"></div>
   </section>
 
@@ -67,9 +71,11 @@ let DATA={id:'',ep:'1',episodes:[],list:null};
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function api(path){const r=await fetch(API_BASE+'/api'+path);if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
 function qs(k,d){const v=new URLSearchParams(location.search).get(k);return v===null?d:v}
+function fmtDur(s){s=Math.round(Number(s)||0);if(!s)return '-';const m=Math.floor(s/60),r=s%60;return m?m+' 分 '+r+' 秒':r+' 秒';}
 
 function destroyPlayer(){if(hlsPlayer){try{hlsPlayer.destroy()}catch(e){}hlsPlayer=null}}
 function setStatus(t,cls){const el=$('#player-status');el.textContent=t||'';el.className='player-status'+(cls?' '+cls:'')}
+function setWarn(html){$('#warn').innerHTML=html||''}
 
 function playStream(src){
   const video=$('#video');
@@ -85,9 +91,8 @@ function playStream(src){
         destroyPlayer();
       }
     });
-    setStatus('HLS 播放中');
   }else if(video.canPlayType('application/vnd.apple.mpegurl')){
-    video.src=src;setStatus('原生 HLS 播放');
+    video.src=src;
   }else{
     setStatus('当前浏览器不支持 HLS 播放','bad');
   }
@@ -105,14 +110,26 @@ async function loadEpisode(ep,push){
   markActive(DATA.ep);
   if(push){const u=new URL(location.href);u.searchParams.set('id',DATA.id);u.searchParams.set('ep',DATA.ep);history.replaceState(null,'',u)}
   setStatus('正在解析第'+DATA.ep+'集…');
+  setWarn('');
   $('#player-loading').style.display='';
   const item=DATA.episodes.find(e=>String(e.ep)===DATA.ep);
-  if(!item){setStatus('未找到该集','bad');return}
+  const pageUrl=item?item.url:('https://huangguoai.com/video/'+DATA.id+'/');
   try{
-    const d=await api('/play?url='+encodeURIComponent(item.url)+'&ep='+DATA.ep);
+    const d=await api('/play?url='+encodeURIComponent(pageUrl)+'&ep='+DATA.ep);
     if(!d.url)throw Error('未取到播放地址');
     $('#btn-source').href=d.url;
+    // 源站占位流提示：接口声明时长 vs m3u8 实际时长
+    if(d.incomplete){
+      setWarn('<p class="warn"><b>⚠ 源站未下发完整片源</b><br>接口声明本集时长 <b>'+esc(fmtDur(d.declaredDuration))+'</b>，但实际取到的视频流只有 <b>'+esc(fmtDur(d.actualDuration))+'</b>（'+esc(String(d.segments||0))+' 个分片，'+esc(d.keyMethod||'加密')+'）。这是源站对未登录/未付费请求只下发预览片段的限制，不是本站解析错误。播放仍可进行，但只有该预览长度。</p>');
+    }
     playStream(d.proxy||d.url);
+    const parts=[];
+    parts.push('数据源 '+(d.source==='api'?'官方接口 /api/videos/{id}/play':'页面 videoInitialData'));
+    if(d.declaredDuration)parts.push('声明 '+fmtDur(d.declaredDuration));
+    if(d.actualDuration)parts.push('实际 '+fmtDur(d.actualDuration));
+    if(d.segments)parts.push(d.segments+' 分片');
+    if(d.keyMethod)parts.push(d.keyMethod);
+    setStatus(parts.join(' · '));
   }catch(e){
     setStatus('播放地址解析失败，请换一集重试','bad');
     $('#player-loading').textContent='解析失败';
