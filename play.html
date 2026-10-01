@@ -77,25 +77,37 @@ function destroyPlayer(){if(hlsPlayer){try{hlsPlayer.destroy()}catch(e){}hlsPlay
 function setStatus(t,cls){const el=$('#player-status');el.textContent=t||'';el.className='player-status'+(cls?' '+cls:'')}
 function setWarn(html){$('#warn').innerHTML=html||''}
 
-function playStream(src){
+// 播放：**优先直连原始 m3u8**。
+// 原因：CDN 按请求出口 IP 下发不同播放列表 —— 浏览器出口=用户真实 IP，能拿到完整片源；
+// 若走 Cloudflare Worker 代理，出口是数据中心 IP，只会拿到约 54 秒的预览片段。
+// 因此 direct 是首选，fallback（Worker /raw 代理）仅在直连失败时兜底。
+function playStream(direct, fallback, triedFallback){
   const video=$('#video');
   destroyPlayer();
   $('#player-loading').style.display='none';
-  if(window.Hls&&window.Hls.isSupported()){
-    hlsPlayer=new window.Hls({lowLatencyMode:false});
-    hlsPlayer.loadSource(src);
-    hlsPlayer.attachMedia(video);
-    hlsPlayer.on(window.Hls.Events.ERROR,function(_e,data){
-      if(data&&data.fatal){
-        setStatus('播放失败：'+(data.details||'未知错误'),'bad');
-        destroyPlayer();
-      }
-    });
-  }else if(video.canPlayType('application/vnd.apple.mpegurl')){
-    video.src=src;
-  }else{
-    setStatus('当前浏览器不支持 HLS 播放','bad');
+  if(!window.Hls||!window.Hls.isSupported()){
+    if(video.canPlayType('application/vnd.apple.mpegurl')){
+      video.src=direct;setStatus('原生 HLS 播放');
+    }else{
+      setStatus('当前浏览器不支持 HLS 播放','bad');
+    }
+    return;
   }
+  hlsPlayer=new window.Hls({lowLatencyMode:false});
+  hlsPlayer.loadSource(direct);
+  hlsPlayer.attachMedia(video);
+  hlsPlayer.on(window.Hls.Events.ERROR,function(_e,data){
+    if(!data||!data.fatal)return;
+    // 直连失败（CORS/签名/网络）→ 自动回退到 Worker 代理，只回退一次
+    if(!triedFallback&&fallback&&fallback!==direct){
+      setStatus('直连失败，改用代理重试…');
+      destroyPlayer();
+      playStream(fallback,null,true);
+      return;
+    }
+    setStatus('播放失败：'+(data.details||'未知错误'),'bad');
+    destroyPlayer();
+  });
 }
 
 function markActive(ep){
@@ -118,18 +130,12 @@ async function loadEpisode(ep,push){
     const d=await api('/play?url='+encodeURIComponent(pageUrl)+'&ep='+DATA.ep);
     if(!d.url)throw Error('未取到播放地址');
     $('#btn-source').href=d.url;
-    // 源站占位流提示：接口声明时长 vs m3u8 实际时长
-    if(d.incomplete){
-      setWarn('<p class="warn"><b>⚠ 源站未下发完整片源</b><br>接口声明本集时长 <b>'+esc(fmtDur(d.declaredDuration))+'</b>，但实际取到的视频流只有 <b>'+esc(fmtDur(d.actualDuration))+'</b>（'+esc(String(d.segments||0))+' 个分片，'+esc(d.keyMethod||'加密')+'）。这是源站对未登录/未付费请求只下发预览片段的限制，不是本站解析错误。播放仍可进行，但只有该预览长度。</p>');
-    }
-    playStream(d.proxy||d.url);
     const parts=[];
-    parts.push('数据源 '+(d.source==='api'?'官方接口 /api/videos/{id}/play':'页面 videoInitialData'));
-    if(d.declaredDuration)parts.push('声明 '+fmtDur(d.declaredDuration));
-    if(d.actualDuration)parts.push('实际 '+fmtDur(d.actualDuration));
-    if(d.segments)parts.push(d.segments+' 分片');
-    if(d.keyMethod)parts.push(d.keyMethod);
+    parts.push('数据源 '+(d.source==='api'?'官方接口':'页面数据'));
+    parts.push(d.preferDirect?'直连原始地址':'经代理');
+    if(d.declaredDuration)parts.push('本集 '+fmtDur(d.declaredDuration));
     setStatus(parts.join(' · '));
+    playStream(d.url,d.proxy,false);
   }catch(e){
     setStatus('播放地址解析失败，请换一集重试','bad');
     $('#player-loading').textContent='解析失败';
