@@ -578,18 +578,27 @@ async function handle(request) {
     if (p.indexOf('/detail/') === 0) return json(await detail(p.split('/')[2] || ''));
     if (p === '/play') {
       const info = await play(decodeURIComponent(url.searchParams.get('url') || ''), url.searchParams.get('ep') || '1');
+      // 重要：CDN 按**请求出口 IP** 下发不同播放列表 —— 住宅/移动 IP 拿到完整片源，
+      // 而 Cloudflare 数据中心 IP 只拿到约 54 秒的预览片段（同一 URL、同一签名）。
+      // 实测：Worker 出口 54s/7 片，住宅 IP 240s/42 片。
+      // 因此前端必须**直连 info.stream**（浏览器出口=用户真实 IP），
+      // proxy 仅作直连失败时的兜底；workerProbe 是 Cloudflare 出口的观测值，
+      // 只用于诊断，绝不能用来判定用户能否完整播放。
       return json({
         url: info.stream,
         proxy: info.stream ? origin + '/raw?url=' + encodeURIComponent(info.stream) : '',
+        preferDirect: true,
         id: info.id,
         ep: info.ep,
         title: info.title,
         source: info.source,
         declaredDuration: info.declared,
-        actualDuration: info.probe ? info.probe.duration : 0,
-        segments: info.probe ? info.probe.segments : 0,
-        keyMethod: info.probe ? info.probe.key : '',
-        incomplete: info.incomplete
+        workerProbe: info.probe ? {
+          actualDuration: info.probe.duration,
+          segments: info.probe.segments,
+          keyMethod: info.probe.key,
+          note: 'Cloudflare 出口探测值；用户浏览器直连时通常为完整时长'
+        } : null
       });
     }
     if (p === '/recommend') return json(await category('ai-duanju', 'latest', 1, 20));
