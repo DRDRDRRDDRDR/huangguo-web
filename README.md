@@ -66,23 +66,42 @@
 5. **名称统一**：`cleanTitle()` 剥离 `sr-only` 辅助文本、站点后缀、`黄果吃瓜侠·日期·分类` 前缀；剧集标题一律规范为「第N集」。
 6. **HLS 必须用 hls.js**：Chrome / Edge 的 `<video>` 原生不支持 m3u8，且该源为 AES-128 加密切片；播放页用 hls.js，通过 `/raw` 重写分片与密钥 URI，播放器库由 `/hls.js` 代理。
 
-## ⚠ 已知限制（实测结论，非推测）
+## 关键事实：CDN 按「请求出口 IP」下发不同播放列表
 
-**源站对匿名请求只下发 54 秒占位流。** 实测 7 个视频（跨分类、跨时长）：
+这是本项目最重要的一条实测结论，**不要把它当成源站 bug 或本站解析错误**：
 
-| 视频 | 接口声明时长 | m3u8 实际时长 | 分片数 |
-|---|---:|---:|---:|
-| 7460 换爱家族 | 240s | 54s | 7 |
-| 5667 东京牛头人 | 576s | 54s | 7 |
-| 117 高三爱情故事 | 820s | 54s | 7 |
-| 12 / 323 / 7524 / 7540 | 207~268s | 54s | 7 |
+| 请求出口 | m3u8 时长 | 分片数 | 说明 |
+|---|---:|---:|---|
+| **住宅 / 移动 IP（用户浏览器）** | **240s** | **42** | 完整片源 |
+| Cloudflare Worker（数据中心 IP） | 54s | 7 | 预览片段 |
 
-- `/api/videos/{id}/play` 的**元数据正确**（`duration` 与页面标注一致），但 `video_url` 指向的 m3u8 只有 54 秒。
-- `video_key` / `video_iv` / `video_api` **全部为空字符串**——完整片源的解密参数未下发。
-- 已实测无效的解锁尝试：`?vip=1`、`?is_vip=1`、`?free=1`、`?unlock=1`、`X-Requested-With`、页面 Referer、Cookie 会话。
-- 参考项目 [luckyf1oat/hg-player](https://github.com/luckyf1oat/hg-player) 的上游为 `ai.cuct.ccwu.cc`（**现已返回 `error code: 1016` 失效**），其 `/resolve/{epId}?vip=1` 方案针对该上游，黄果站不存在 `/resolve` 端点，无法直接套用。
+同一个 `video_url`、同一份签名，仅因**出口 IP 不同**，CDN 返回不同播放列表。实测对照：
 
-因此本项目**如实呈现**：播放页正常播放源站下发的流，并在检测到占位流时明确提示，不伪装成可看完整片源。
+```
+Worker /api/play 返回的 url
+  ├─ 用住宅 IP 取  → 240s / 42 片  ✅
+  └─ 经 Worker 取  →  54s /  7 片  ❌
+```
+
+因此播放页的正确做法是 **浏览器直连原始 m3u8**（出口=用户真实 IP），而不是走 Worker 代理。
+`/api/play` 会返回 `preferDirect: true` 与 `url`（原始地址）、`proxy`（兜底地址）；
+前端优先用 `url` 直连，仅在直连失败时才回退 `proxy`。
+
+`workerProbe` 字段是 **Cloudflare 出口的观测值**，只用于诊断，
+**绝不能**用来判定用户能否完整播放。
+
+### 跨域可用性（实测）
+
+m3u8、密钥（`crypt.key`）、ts 分片**全部返回 `Access-Control-Allow-Origin: *`**，
+因此浏览器可跨域直连，无需代理。抽查结果：
+
+```
+m3u8      status=200  ACAO=*  240s / 42 片 / EXT-X-ENDLIST
+crypt.key status=200  ACAO=*  len=16
+#0  ts    status=200  ACAO=*  3,546,816 B
+#21 ts    status=200  ACAO=*  3,435,328 B
+#41 ts    status=200  ACAO=*     52,080 B
+```
 
 ## 本地预览
 
