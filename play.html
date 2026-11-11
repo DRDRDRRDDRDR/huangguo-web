@@ -23,7 +23,20 @@
   <section class="player-wrap">
     <div class="player-box" id="player-box">
       <div class="player-loading" id="player-loading">正在加载播放器…</div>
-      <video id="video" controls autoplay playsinline preload="metadata"></video>
+      <video id="video" playsinline preload="metadata"></video>
+      <div class="hg-ctrl" id="hg-ctrl">
+        <button id="btn-play" title="播放/暂停">▶</button>
+        <span class="hg-time" id="hg-time">00:00 / 00:00</span>
+        <div class="hg-seek" id="hg-seek">
+          <div class="hg-seek-track">
+            <div class="hg-seek-buffer" id="hg-buffer"></div>
+            <div class="hg-seek-played" id="hg-played"></div>
+            <div class="hg-seek-thumb" id="hg-thumb"></div>
+          </div>
+        </div>
+        <button id="btn-mute" title="静音">🔊</button>
+        <button id="btn-fs" title="全屏">⛶</button>
+      </div>
     </div>
     <div class="player-bar">
       <div class="player-title" id="player-title">加载中…</div>
@@ -80,6 +93,76 @@ function setWarn(html){$('#warn').innerHTML=html||''}
 // 原因：CDN 按请求出口 IP 下发不同播放列表 —— 浏览器出口=用户真实 IP，能拿到完整片源；
 // 若走 Cloudflare Worker 代理，出口是数据中心 IP，只会拿到约 54 秒的预览片段。
 // 因此 direct 是首选，fallback（Worker /raw 代理）仅在直连失败时兜底。
+// ===== 自定义播放控制条 =====
+// 不依赖原生 controls：各浏览器把控制栏裁掉或在高 z-index 层下方时，原生控件会消失。
+function fmtTime(s){
+  s=Math.max(0,Math.floor(Number(s)||0));
+  const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+  const p=n=>String(n).padStart(2,'0');
+  return h?`${h}:${p(m)}:${p(x)}`:`${p(m)}:${p(x)}`;
+}
+function bindControls(){
+  const box=$('#player-box'), video=$('#video');
+  if(!video||!box)return;
+  const btnPlay=$('#btn-play'), btnMute=$('#btn-mute'), btnFs=$('#btn-fs');
+  const timeEl=$('#hg-time'), seek=$('#hg-seek');
+  const played=$('#hg-played'), buffer=$('#hg-buffer'), thumb=$('#hg-thumb');
+
+  function paint(){
+    const d=video.duration;
+    const pct=(d&&isFinite(d))?(video.currentTime/d*100):0;
+    played.style.width=pct+'%';
+    thumb.style.left=pct+'%';
+    let buf=0;
+    try{ if(video.buffered.length&&d) buf=video.buffered.end(video.buffered.length-1)/d*100; }catch(e){}
+    buffer.style.width=Math.min(100,buf)+'%';
+    timeEl.textContent=fmtTime(video.currentTime)+' / '+(d&&isFinite(d)?fmtTime(d):'00:00');
+    btnPlay.textContent=video.paused?'▶':'❚❚';
+  }
+  video.addEventListener('timeupdate',paint);
+  video.addEventListener('durationchange',paint);
+  video.addEventListener('progress',paint);
+  video.addEventListener('loadedmetadata',paint);
+  video.addEventListener('play',paint);
+  video.addEventListener('pause',paint);
+
+  btnPlay.onclick=()=>{ video.paused?video.play().catch(()=>{}):video.pause(); };
+  video.addEventListener('click',()=>{ video.paused?video.play().catch(()=>{}):video.pause(); });
+
+  btnMute.onclick=()=>{ video.muted=!video.muted; btnMute.textContent=video.muted?'🔇':'🔊'; };
+  btnFs.onclick=()=>{
+    if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
+    else if(box.requestFullscreen)box.requestFullscreen().catch(()=>{});
+    else if(video.webkitEnterFullscreen)video.webkitEnterFullscreen();
+  };
+
+  // 拖动/点击跳转：按下即跟随，松开结束
+  let dragging=false;
+  function seekTo(ev){
+    const r=seek.getBoundingClientRect();
+    const x=Math.min(Math.max((ev.clientX-r.left)/r.width,0),1);
+    const d=video.duration;
+    if(d&&isFinite(d)){ video.currentTime=x*d; paint(); }
+  }
+  seek.addEventListener('pointerdown',e=>{ dragging=true; seek.setPointerCapture&&seek.setPointerCapture(e.pointerId); seekTo(e); });
+  seek.addEventListener('pointermove',e=>{ if(dragging)seekTo(e); });
+  seek.addEventListener('pointerup',e=>{ dragging=false; seek.releasePointerCapture&&seek.releasePointerCapture(e.pointerId); });
+  seek.addEventListener('pointercancel',()=>{ dragging=false; });
+
+  // 鼠标静止 2.4 秒后淡出控制条，移动即恢复
+  let idleTimer=null;
+  function wake(){
+    box.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer=setTimeout(()=>{ if(!video.paused)box.classList.add('idle'); },2400);
+  }
+  ['pointermove','pointerdown','touchstart'].forEach(ev=>box.addEventListener(ev,wake,{passive:true}));
+  video.addEventListener('play',wake);
+  wake();
+  paint();
+  window.__hgPaint = paint;
+}
+
 function playStream(direct, fallback, triedFallback){
   const video=$('#video');
   destroyPlayer();
@@ -95,6 +178,11 @@ function playStream(direct, fallback, triedFallback){
   hlsPlayer=new window.Hls({lowLatencyMode:false});
   hlsPlayer.loadSource(direct);
   hlsPlayer.attachMedia(video);
+  // hls 解析出时长后立刻刷新控制条，否则首帧前时间条一直是 00:00
+  hlsPlayer.on(window.Hls.Events.MANIFEST_PARSED,function(){
+    const v=$('#video'); if(v){ try{v.play().catch(()=>{});}catch(e){} }
+    if(window.__hgPaint) window.__hgPaint();
+  });
   hlsPlayer.on(window.Hls.Events.ERROR,function(_e,data){
     if(!data||!data.fatal)return;
     // 直连失败（CORS/签名/网络）→ 自动回退到 Worker 代理，只回退一次
@@ -184,6 +272,7 @@ async function init(){
       if(e.key==='ArrowLeft')step(-1);
       if(e.key==='ArrowRight')step(1);
     });
+    bindControls();
     loadRelated(id);
     loadEpisode(ep,false);
   }catch(e){
