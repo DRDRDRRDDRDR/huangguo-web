@@ -1,4 +1,6 @@
 # 黄果解析站
+# 好用的话给DR点个Star好吗秋梨膏！
+# 到底是谁在用爬虫爬我这里数据 后端接口要爆了宝宝，你去爬源站不好吗，已加反爬
 
 基于 [jinshengchan/huangguo-fongmi](https://github.com/jinshengchan/huangguo-fongmi) 与 [cluntop/tvbox](https://github.com/cluntop/tvbox)（`js/ss/huangguo.py`、`js/ss/huangguo2.py`）的适配逻辑实现。前端部署到 GitHub Pages，API 与跨域代理部署到 Cloudflare Workers 免费档。
 
