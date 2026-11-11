@@ -72,6 +72,83 @@ async function signHeaders(pathWithQuery) {
   return { 'X-HG-Ts': String(win * 300), 'X-HG-Sig': sig };
 }
 
+
+// ===== 无感人机验证：静默采集交互信号，换取 proof =====
+// 全程不弹窗、不打断用户。页面加载即开始在后台累积信号，
+// 攒够后向 /api/challenge 换 proof，业务请求自动带上。
+const SIG = { moves: 0, lastX: null, lastY: null, deltas: [], start: Date.now(), granted: false, proof: null, pending: null };
+
+function collectPointer(e) {
+  SIG.moves++;
+  if (SIG.lastX !== null) {
+    const dx = e.clientX - SIG.lastX, dy = e.clientY - SIG.lastY;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > 0) SIG.deltas.push(d);
+    if (SIG.deltas.length > 200) SIG.deltas.shift();
+  }
+  SIG.lastX = e.clientX; SIG.lastY = e.clientY;
+}
+
+function buildSignals() {
+  const dwell = Date.now() - SIG.start;
+  let jitter = 0, spread = 0;
+  if (SIG.deltas.length >= 3) {
+    const mean = SIG.deltas.reduce((a, b) => a + b, 0) / SIG.deltas.length;
+    const variance = SIG.deltas.reduce((a, b) => a + (b - mean) * (b - mean), 0) / SIG.deltas.length;
+    jitter = Math.sqrt(variance);
+    // 事件间隔多样性：用相邻位移差的离散度近似
+    let s = 0;
+    for (let i = 1; i < SIG.deltas.length; i++) s += Math.abs(SIG.deltas[i] - SIG.deltas[i - 1]);
+    spread = s / Math.max(1, SIG.deltas.length - 1);
+  }
+  return {
+    dwell, moves: SIG.moves, jitter: Number(jitter.toFixed(3)), spread: Number(spread.toFixed(3)),
+    cores: navigator.hardwareConcurrency || 0,
+    tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || '')
+  };
+}
+
+// 静默换 proof。失败不打扰用户，下次再试。
+async function acquireProof() {
+  if (SIG.granted) return SIG.proof;
+  if (SIG.pending) return SIG.pending;
+  SIG.pending = (async () => {
+    try {
+      const sig = await signHeaders('/api/challenge');
+      const r = await fetch(API_ENDPOINTS[0] + '/api/challenge', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, sig),
+        body: JSON.stringify({ signals: buildSignals() })
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (d && d.ok && d.proof) {
+        SIG.proof = d.proof; SIG.granted = true;
+        return d.proof;
+      }
+      return null;
+    } catch (e) { return null; }
+    finally { SIG.pending = null; }
+  })();
+  return SIG.pending;
+}
+
+// 启动采集：鼠标、触摸、滚动、键盘都算真实交互
+function bootSignals() {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('pointermove', collectPointer, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    const t = e.touches && e.touches[0];
+    if (t) collectPointer({ clientX: t.clientX, clientY: t.clientY });
+  }, { passive: true });
+  window.addEventListener('scroll', () => { SIG.moves += 2; }, { passive: true });
+  window.addEventListener('keydown', () => { SIG.moves += 1; }, { passive: true });
+  // 首次尝试：等页面有真实停留与交互后再换，避免刚加载就交白卷
+  setTimeout(() => { acquireProof(); }, 1200);
+  // 之后每 20 秒补一次，防止 proof 过期
+  setInterval(() => { if (!SIG.granted) acquireProof(); }, 20000);
+}
+
 async function api(path, options) {
   const order = pickEndpointOrder();
   let lastErr = null;
@@ -81,6 +158,7 @@ async function api(path, options) {
     try {
       const opts = Object.assign({}, options || {});
       opts.headers = Object.assign({}, (options && options.headers) || {}, sig);
+      if (SIG.proof) opts.headers['X-HG-Proof'] = SIG.proof;
       const r = await fetch(base + '/api' + path, opts);
       if (!r.ok) { markFail(i); lastErr = Error('HTTP ' + r.status); continue; }
       const data = await r.json();
@@ -163,3 +241,7 @@ async function loadMeta() {
     return { cats: CATS_FALLBACK, sorts: SORTS_FALLBACK };
   }
 }
+
+// 页面就绪即开始静默采集，用户无感知
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootSignals);
+else bootSignals();
