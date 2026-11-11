@@ -136,6 +136,14 @@ function bindControls(){
     else if(video.webkitEnterFullscreen)video.webkitEnterFullscreen();
   };
 
+  // 控制条内的交互不应冒泡到 video，否则松手时的 click 会误触发暂停
+  const ctrl=$('#hg-ctrl');
+  if(ctrl){
+    ['click','pointerdown','pointerup','pointermove','dblclick'].forEach(ev=>{
+      ctrl.addEventListener(ev,e=>e.stopPropagation());
+    });
+  }
+
   // 拖动/点击跳转：按下即跟随，松开结束
   let dragging=false;
   function seekTo(ev){
