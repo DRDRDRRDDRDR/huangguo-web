@@ -73,7 +73,7 @@ function qs(k,d){const v=new URLSearchParams(location.search).get(k);return v===
 function fmtDur(s){s=Math.round(Number(s)||0);if(!s)return '-';const m=Math.floor(s/60),r=s%60;return m?m+' 分 '+r+' 秒':r+' 秒';}
 
 function destroyPlayer(){if(hlsPlayer){try{hlsPlayer.destroy()}catch(e){}hlsPlayer=null}}
-function setStatus(t,cls){const el=$('#player-status');el.textContent=t||'';el.className='player-status'+(cls?' '+cls:'')}
+function setPlayerStatus(t,cls){const el=$('#player-status');el.textContent=t||'';el.className='player-status'+(cls?' '+cls:'')}
 function setWarn(html){$('#warn').innerHTML=html||''}
 
 // 播放：**优先直连原始 m3u8**。
@@ -86,9 +86,9 @@ function playStream(direct, fallback, triedFallback){
   $('#player-loading').style.display='none';
   if(!window.Hls||!window.Hls.isSupported()){
     if(video.canPlayType('application/vnd.apple.mpegurl')){
-      video.src=direct;setStatus('原生 HLS 播放');
+      video.src=direct;setPlayerStatus('原生 HLS 播放');
     }else{
-      setStatus('当前浏览器不支持 HLS 播放','bad');
+      setPlayerStatus('当前浏览器不支持 HLS 播放','bad');
     }
     return;
   }
@@ -99,12 +99,12 @@ function playStream(direct, fallback, triedFallback){
     if(!data||!data.fatal)return;
     // 直连失败（CORS/签名/网络）→ 自动回退到 Worker 代理，只回退一次
     if(!triedFallback&&fallback&&fallback!==direct){
-      setStatus('直连失败，改用代理重试…');
+      setPlayerStatus('直连失败，改用代理重试…');
       destroyPlayer();
       playStream(fallback,null,true);
       return;
     }
-    setStatus('播放失败：'+(data.details||'未知错误'),'bad');
+    setPlayerStatus('播放失败：'+(data.details||'未知错误'),'bad');
     destroyPlayer();
   });
 }
@@ -120,7 +120,7 @@ async function loadEpisode(ep,push){
   DATA.ep=String(ep);
   markActive(DATA.ep);
   if(push){const u=new URL(location.href);u.searchParams.set('id',DATA.id);u.searchParams.set('ep',DATA.ep);history.replaceState(null,'',u)}
-  setStatus('正在解析第'+DATA.ep+'集…');
+  setPlayerStatus('正在解析第'+DATA.ep+'集…');
   setWarn('');
   $('#player-loading').style.display='';
   const item=DATA.episodes.find(e=>String(e.ep)===DATA.ep);
@@ -133,10 +133,10 @@ async function loadEpisode(ep,push){
     parts.push('数据源 '+(d.source==='api'?'官方接口':'页面数据'));
     parts.push(d.preferDirect?'直连原始地址':'经代理');
     if(d.declaredDuration)parts.push('本集 '+fmtDur(d.declaredDuration));
-    setStatus(parts.join(' · '));
+    setPlayerStatus(parts.join(' · '));
     playStream(d.url,d.proxy,false);
   }catch(e){
-    setStatus('播放地址解析失败，请换一集重试','bad');
+    setPlayerStatus('播放地址解析失败，请换一集重试','bad');
     $('#player-loading').textContent='解析失败';
   }
 }
@@ -159,7 +159,7 @@ async function loadRelated(id){
 async function init(){
   const id=qs('id','');
   const ep=qs('ep','1');
-  if(!id){$('#title').textContent='缺少剧集参数';setStatus('请从首页选择剧集进入','bad');return}
+  if(!id){$('#title').textContent='缺少剧集参数';setPlayerStatus('请从首页选择剧集进入','bad');return}
   DATA.id=id;
   try{
     const x=(await api('/detail/'+encodeURIComponent(id))).list?.[0];
@@ -188,7 +188,7 @@ async function init(){
     loadEpisode(ep,false);
   }catch(e){
     $('#title').textContent='详情读取失败';
-    setStatus('详情读取失败：'+String(e.message||e),'bad');
+    setPlayerStatus('详情读取失败：'+String(e.message||e),'bad');
   }
 }
 init();

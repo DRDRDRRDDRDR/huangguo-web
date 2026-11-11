@@ -166,3 +166,19 @@ npx wrangler deploy
 ```
 
 站点内容来自第三方公开站点，使用者需自行遵守当地法律法规与版权规则。
+
+## 反爬防护
+
+爬虫直接打 API 会迅速耗尽 Worker 免费档每天 10 万次请求，因此加了三层防护，全部在 Worker 的 `handle` 入口执行。
+
+**第一层 浏览器指纹**。检查 `User-Agent`、`Referer`、`Origin`、`Sec-Fetch-*`。明确的脚本特征直接拒绝，包括 `curl`、`wget`、`python-requests`、`aiohttp`、`httpx`、`scrapy`、`go-http-client`、`okhttp`、`node-fetch`、`undici`、`postmanruntime`，以及 `headlesschrome`、`puppeteer`、`playwright`、`selenium`。浏览器跨域请求必然带 Referer 或 Origin，纯脚本客户端通常没有。
+
+**第二层 时间窗口 HMAC**。前端每次请求生成 `X-HG-Ts` 与 `X-HG-Sig`，签名内容是 `窗口号 + path + query`，窗口 5 分钟，前后各容忍一个窗口。爬虫必须真正执行 JS 并复刻签名算法才能通过。密钥写在前端，目的是挡住不执行 JS 的批量脚本，不是对抗有意的逆向。
+
+**第三层 Cache API**。读接口按内容类型缓存，命中后直接返回不打源站：分类 5 分钟、排行榜 10 分钟、话题与吃瓜 15 分钟、详情 10 分钟、搜索 3 分钟、健康检查 1 小时。播放地址因签名有时效不缓存。
+
+**免防护路径**：`/api/` 与 `/api/categories` 用于探活和枚举，不含业务数据，不校验签名；`/media`、`/raw`、`/hls.js` 由 `<img>` 与 `<video>` 直接发起，不带自定义头，也不设防。
+
+**实测结果**：正常浏览器五项接口全部 200；无签名、python-requests、curl、headless、无 Referer 五种爬虫场景全部 403；过期签名返回 `sig:expired`。
+
+注意 `CORS` 需要放行 `X-HG-Ts` 与 `X-HG-Sig`，否则浏览器预检会失败，这是最容易漏的一环。

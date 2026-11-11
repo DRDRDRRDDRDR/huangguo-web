@@ -50,13 +50,38 @@ function mediaUrl(p) {
 }
 
 // 依次尝试各端点，任一成功即返回；全部失败才抛错
+
+// ===== 反爬签名 =====
+// Worker 用同一密钥与算法校验，窗口 5 分钟。密钥在前端可见，目的是挡掉
+// 不执行 JS 的脚本爬虫，不是对抗有心的逆向者。
+const HG_SIG_SECRET = 'hg-dx150-2026-11-w7Qm4pLz';
+
+async function hmacHex(msg) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(HG_SIG_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg)));
+  return Array.from(sig).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 对 path+query 生成签名，注意必须与实际请求的 URL 完全一致
+async function signHeaders(pathWithQuery) {
+  const win = Math.floor(Date.now() / 1000 / 300);
+  const sig = await hmacHex(win + '\n' + pathWithQuery);
+  return { 'X-HG-Ts': String(win * 300), 'X-HG-Sig': sig };
+}
+
 async function api(path, options) {
   const order = pickEndpointOrder();
   let lastErr = null;
+  const sig = await signHeaders('/api' + path);
   for (const i of order) {
     const base = API_ENDPOINTS[i];
     try {
-      const r = await fetch(base + '/api' + path, options);
+      const opts = Object.assign({}, options || {});
+      opts.headers = Object.assign({}, (options && options.headers) || {}, sig);
+      const r = await fetch(base + '/api' + path, opts);
       if (!r.ok) { markFail(i); lastErr = Error('HTTP ' + r.status); continue; }
       const data = await r.json();
       markOk(i);
