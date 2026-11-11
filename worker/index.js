@@ -492,6 +492,64 @@ function m3u8Info(text) {
 
 // 播放解析：官方 /api/videos/{id}/play 优先，页面 videoInitialData 兜底；
 // 并探测真实流时长以识别源站占位/预览片段
+
+// ===== dx150-edge-v1 加密协议（站点 2026-11-09 起启用）=====
+// 业务接口迁到 /api/{playback|public|dynamic|user}/request，内层才是真实 HTTP 请求。
+// 握手：ECDH P-256 -> HKDF-SHA256 派生双密钥 -> AES-GCM 双向加密。
+const DX_PROTOCOL='dx150-edge-v1';
+const DX_EP={user:'/api/user/request',playback:'/api/playback/request',public:'/api/public/request',dynamic:'/api/dynamic/request'};
+function dxB64u(b){let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function dxUb64u(v){const s=atob(v.replace(/-/g,'+').replace(/_/g,'/'));const b=new Uint8Array(s.length);for(let i=0;i<s.length;i++)b[i]=s.charCodeAt(i);return b;}
+function dxUb64(v){const s=atob(v);const b=new Uint8Array(s.length);for(let i=0;i<s.length;i++)b[i]=s.charCodeAt(i);return b;}
+function dxB64(b){let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return btoa(s);}
+function dxNonce(seq){const b=new Uint8Array(12);new DataView(b.buffer).setUint32(8,seq,false);return b;}
+const dxSessions={};
+async function dxOpen(scope,base){
+  const enc=new TextEncoder(),ecdh={name:'ECDH',namedCurve:'P-256'};
+  const pair=await crypto.subtle.generateKey(ecdh,false,['deriveBits']);
+  const pub=await crypto.subtle.exportKey('raw',pair.publicKey);
+  const hr=await fetch(base+DX_EP[scope],{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({v:1,type:'hello',client_pub:dxB64u(new Uint8Array(pub))})});
+  if(!hr.ok)throw new Error('dx hello '+hr.status);
+  const hello=await hr.json();
+  if(!hello||hello.v!==1||hello.type!=='hello')throw new Error('dx bad hello');
+  const sp=await crypto.subtle.importKey('raw',dxUb64u(hello.server_pub),ecdh,false,[]);
+  const shared=await crypto.subtle.deriveBits({name:'ECDH',public:sp},pair.privateKey,256);
+  const hkdf=await crypto.subtle.importKey('raw',shared,'HKDF',false,['deriveKey']);
+  const salt=dxUb64u(hello.salt);
+  const info=[DX_PROTOCOL,scope,hello.site,hello.kid,hello.sid].join('\n');
+  const mk=(d,o)=>crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt,info:enc.encode(info+'\n'+d)},hkdf,{name:'AES-GCM',length:256},false,[o]);
+  const k=await Promise.all([mk('req','encrypt'),mk('res','decrypt')]);
+  const lt=Math.floor(Date.now()/1000);
+  const s={info,kid:hello.kid,sid:hello.sid,off:hello.server_time-lt,exp:lt+hello.expires_at-hello.server_time,seq:0,rk:k[0],sk:k[1]};
+  dxSessions[scope]=s;return s;
+}
+async function dxCall(scope,base,packet){
+  const enc=new TextEncoder();
+  let s=dxSessions[scope];
+  if(!s||s.exp<=Math.floor(Date.now()/1000)+5)s=await dxOpen(scope,base);
+  const seq=++s.seq,ts=Math.floor(Date.now()/1000)+s.off,iv=dxNonce(seq);
+  const p=d=>({name:'AES-GCM',iv,additionalData:enc.encode([s.info,d,seq,ts].join('\n'))});
+  const c=await crypto.subtle.encrypt(p('req'),s.rk,enc.encode(JSON.stringify({request:packet})));
+  const rr=await fetch(base+DX_EP[scope],{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({v:1,type:'call',kid:s.kid,sid:s.sid,seq,ts,ciphertext:dxB64u(new Uint8Array(c))})});
+  if(!rr.ok){delete dxSessions[scope];throw new Error('dx call '+rr.status);}
+  const j=await rr.json();
+  const plain=await crypto.subtle.decrypt(p('res'),s.sk,dxUb64u(j.ciphertext));
+  const inner=JSON.parse(new TextDecoder().decode(plain));
+  return {status:inner.status,body:new TextDecoder().decode(dxUb64(inner.body))};
+}
+function dxPacket(method,path,obj){
+  const bytes=new TextEncoder().encode(obj===undefined?'':JSON.stringify(obj));
+  return {method,path,body:dxB64(bytes),content_type:obj===undefined?'':'application/json',visitor_id:''};
+}
+async function playViaDx(id,ep){
+  const base=SITE;
+  const r=await dxCall('playback',base,dxPacket('POST','/api/videos/'+id+'/episodes/'+ep+'/playback',{}));
+  if(r.status!==200)return null;
+  const d=JSON.parse(r.body).data||{};
+  const st=d.streams||{};
+  return {url:st.main||st.preview||'',hevc:st.hevc||'',cdn:d.cdn||{},duration:0};
+}
+
 async function play(page, ep) {
   const id = (String(page || '').match(/\/video\/(\d+)/) || String(page || '').match(/^(\d+)$/) || [])[1] || '';
   const epNum = String(ep || '1');
@@ -577,29 +635,31 @@ async function handle(request) {
     if (p.indexOf('/search/') === 0) return json(await search(decodeURIComponent(p.split('/')[2] || ''), page, size));
     if (p.indexOf('/detail/') === 0) return json(await detail(p.split('/')[2] || ''));
     if (p === '/play') {
-      const info = await play(decodeURIComponent(url.searchParams.get('url') || ''), url.searchParams.get('ep') || '1');
-      // 重要：CDN 按**请求出口 IP** 下发不同播放列表 —— 住宅/移动 IP 拿到完整片源，
-      // 而 Cloudflare 数据中心 IP 只拿到约 54 秒的预览片段（同一 URL、同一签名）。
-      // 实测：Worker 出口 54s/7 片，住宅 IP 240s/42 片。
-      // 因此前端必须**直连 info.stream**（浏览器出口=用户真实 IP），
-      // proxy 仅作直连失败时的兜底；workerProbe 是 Cloudflare 出口的观测值，
-      // 只用于诊断，绝不能用来判定用户能否完整播放。
-      return json({
-        url: info.stream,
-        proxy: info.stream ? origin + '/raw?url=' + encodeURIComponent(info.stream) : '',
-        preferDirect: true,
-        id: info.id,
-        ep: info.ep,
-        title: info.title,
-        source: info.source,
-        declaredDuration: info.declared,
-        workerProbe: info.probe ? {
-          actualDuration: info.probe.duration,
-          segments: info.probe.segments,
-          keyMethod: info.probe.key,
-          note: 'Cloudflare 出口探测值；用户浏览器直连时通常为完整时长'
-        } : null
-      });
+      const rawParam = decodeURIComponent(url.searchParams.get('url') || '');
+      const epParam = url.searchParams.get('ep') || '1';
+      const idMatch = (String(rawParam).match(/\/video\/(\d+)/) || String(rawParam).match(/^(\d+)$/) || [])[1] || '';
+      if (idMatch) {
+        try {
+          const dx = await playViaDx(idMatch, epParam);
+          if (dx && dx.url) {
+            let probe = null;
+            try {
+              const hdr = { 'User-Agent': UA, 'Referer': SITE + '/' };
+              if (dx.cdn && dx.cdn.authKey) hdr[dx.cdn.authKey] = dx.cdn.authValue || '';
+              const pr = await fetch(dx.url, { headers: hdr });
+              if (pr.ok) {
+                const t = await pr.text();
+                let sec = 0; const re = /#EXTINF:([\d.]+)/g; let m;
+                while ((m = re.exec(t))) sec += parseFloat(m[1]);
+                probe = { duration: Math.round(sec * 10) / 10, segments: (t.match(/#EXTINF/g) || []).length };
+              }
+            } catch (e) {}
+            return json({ url: dx.url, proxy: origin + '/raw?url=' + encodeURIComponent(dx.url), preferDirect: true, id: idMatch, ep: epParam, hevc: dx.hevc || '', source: 'dx150', declaredDuration: probe ? probe.duration : 0, workerProbe: probe });
+          }
+        } catch (e) {}
+      }
+      const info = await play(rawParam, epParam);
+      return json({ url: info.stream, proxy: info.stream ? origin + '/raw?url=' + encodeURIComponent(info.stream) : '', preferDirect: true, id: info.id, ep: info.ep, title: info.title, source: info.source, declaredDuration: info.declared, workerProbe: info.probe });
     }
     if (p === '/recommend') return json(await category('ai-duanju', 'latest', 1, 20));
     return json(await category(p.replace(/^\//, '').replace(/\/$/, '') || 'ai-duanju', sort, page, size));

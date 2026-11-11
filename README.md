@@ -116,3 +116,51 @@ npx wrangler deploy
 ```
 
 站点内容来自第三方公开站点，使用者需自行遵守当地法律法规与版权规则。
+## 2026-11-11 重大更新：源站迁移 + 加密接口
+
+### 源站域名变更
+
+`huangguoai.com` 已不可达，DNS 被污染到 Facebook 网段，直连与 DoH 均超时。
+官方入口页 `huangguoai.ai` 公布的新地址中，**`huangguoai.io` 接口结构完全一致**，已改为主用。
+封面 CDN 也从 `pic.wirqed.cn` 换成了 `pic.drleao.cn`，AES-CBC 解密逻辑不变。
+
+### 接口全面加密：dx150-edge-v1
+
+站点 2026-11-09 起把业务接口迁到加密通道，旧的 `/api/videos/{id}/play` 返回的 `video_url` 恒为空，
+这正是「解析不了」的直接原因。协议如下：
+
+1. 握手 `POST /api/playback/request`，body 为 `{v:1, type:'hello', client_pub:<base64url ECDH P-256 公钥>}`
+2. 服务端返回 `server_pub`、`salt`、`kid`、`sid`、`server_time`、`expires_at`
+3. ECDH 协商出共享密钥，经 HKDF-SHA256 按 `dx150-edge-v1\n<scope>\n<site>\n<kid>\n<sid>\n<req|res>` 派生双向 AES-GCM 密钥
+4. 业务请求封装为 `{method, path, body:<base64>, content_type, visitor_id}`，加密后包成
+   `{v:1, type:'call', kid, sid, seq, ts, ciphertext}` 发出，响应同样加密返回内层 HTTP 结果
+
+**播放地址的正确取法**：`POST /api/videos/{id}/episodes/{ep}/playback`，解密后得到
+`data.streams.main`，实测第 1 集 240 秒 / 42 分片，带 `via_m=dx150` 签名。
+
+### 多 Worker 分流
+
+部署了 3 个功能完全相同的 Worker，前端按「轮询起点 + 失败自动切换」分散请求：
+
+| Worker | 地址 |
+|---|---|
+| 主 | https://huangguo-parser.13681235735.workers.dev |
+| 2 | https://hg-parser-2.13681235735.workers.dev |
+| 3 | https://hg-parser-3.13681235735.workers.dev |
+
+`app.js` 里的 `API_ENDPOINTS` 数组维护这份清单，某个端点失败会记冷却时间并自动跳过，
+封面图片用「最近一次成功的端点」拼接，避免全部压在同一个 Worker 上。
+
+## 本地预览
+
+```bash
+python -m http.server 8080
+```
+
+## Worker 部署
+
+```bash
+npx wrangler deploy
+```
+
+站点内容来自第三方公开站点，使用者需自行遵守当地法律法规与版权规则。
