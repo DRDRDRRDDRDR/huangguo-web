@@ -82,6 +82,18 @@ function mediaUrl(p) {
   return p;
 }
 
+// 生成 img 标签。源站封面是密文，直接放 src 会裂图，
+// 所以把地址放进 data-src，等解密完再替换 src。
+function imgTag(url, alt, cls) {
+  const real = mediaUrl(url);
+  const ph = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="320"><rect width="240" height="320" fill="#1a1a1a"/><text x="120" y="165" fill="#555" font-size="15" text-anchor="middle">黄果</text></svg>'
+  );
+  const klass = cls ? ' class="' + cls + '"' : '';
+  const attr = real ? ' data-src="' + esc(real) + '"' : '';
+  return '<img src="' + ph + '"' + attr + klass + ' loading="lazy" alt="' + esc(alt || '') + '">';
+}
+
 // ===== 路径翻译 =====
 // 页面沿用旧 Worker 的接口风格，这里翻译成源站的真实路径。
 // 好处是所有 html 一行都不用改，风险面最小。
@@ -173,10 +185,10 @@ function fromItem(it) {
 }
 
 function cardHtml(x) {
-  const ph = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="320"><rect width="240" height="320" fill="#1a1a1a"/><text x="120" y="165" fill="#555" font-size="16" text-anchor="middle">黄果</text></svg>');
   const score = x.vod_score ? `<i class="score">${esc(String(x.vod_score))}</i>` : '';
-  return `<article class="card" data-id="${esc(x.vod_id)}" data-cover="${esc(x.vod_pic)}">`
-    + `<div class="cover"><img src="${ph}" loading="lazy" alt="${esc(x.vod_name)}">${score}</div>`
+  const pic = x.vod_pic ? imgTag(x.vod_pic, x.vod_name) : '<span>黄果</span>';
+  return `<article class="card" data-id="${esc(x.vod_id)}">`
+    + `<div class="cover">${pic}${score}</div>`
     + `<div class="card-body"><h3>${esc(x.vod_name)}</h3><p>${esc(x.vod_remarks || '黄果短剧')}</p></div></article>`;
 }
 
@@ -184,19 +196,32 @@ function gridHtml(list) {
   return (list || []).map(cardHtml).join('');
 }
 
+// 解封面。支持两种形态：
+// 1. 卡片带 data-cover，图在 .cover img 里
+// 2. 任意 img 直接挂 src，播放页海报和推荐位属于这种
+// 两种都必须解，否则浏览器拿到密文就是一串裂图。
 async function hydrateCovers(root) {
-  const cards = Array.from(root.querySelectorAll('.card[data-cover]:not([data-cover-done])'));
+  const jobs = [];
+
+  root.querySelectorAll('.card[data-cover]:not([data-cover-done])').forEach((card) => {
+    card.setAttribute('data-cover-done', '1');
+    const url = card.dataset.cover;
+    const img = card.querySelector('.cover img');
+    if (url && img) jobs.push({ url, img });
+  });
+
+  root.querySelectorAll('img[data-src]:not([data-src-done])').forEach((img) => {
+    img.setAttribute('data-src-done', '1');
+    const url = img.getAttribute('data-src');
+    if (url) jobs.push({ url, img });
+  });
+
   let idx = 0;
   async function runner() {
-    while (idx < cards.length) {
-      const card = cards[idx++];
-      card.setAttribute('data-cover-done', '1');
-      const url = card.dataset.cover;
-      if (!url) continue;
-      const img = card.querySelector('.cover img');
-      if (!img) continue;
-      const dataUrl = await decryptCover(url);
-      if (dataUrl) img.src = dataUrl;
+    while (idx < jobs.length) {
+      const job = jobs[idx++];
+      const dataUrl = await decryptCover(job.url);
+      if (dataUrl) job.img.src = dataUrl;
     }
   }
   await Promise.all(Array.from({ length: 4 }, runner));
@@ -208,8 +233,19 @@ function bootCoverObserver() {
   if (typeof MutationObserver === 'undefined' || !document.body) return;
   const scan = (node) => {
     if (!node || node.nodeType !== 1) return;
-    if (node.classList && node.classList.contains('card')) hydrateCovers(node.parentNode || node);
-    else if (node.querySelectorAll) hydrateCovers(node);
+    hydrateCovers(node);
+    // 新增节点本身就是带 data-src 的 img 时，querySelectorAll 查不到自己，
+    // 单独补一次，否则单张海报会一直停在占位图。
+    if (node.matches && node.matches('img[data-src]:not([data-src-done])')) {
+      const url = node.getAttribute('data-src');
+      node.setAttribute('data-src-done', '1');
+      if (url) decryptCover(url).then((d) => { if (d) node.src = d; });
+    }
+    if (node.classList && node.classList.contains('card') && node.dataset.cover && !node.dataset.coverDone) {
+      node.setAttribute('data-cover-done', '1');
+      const img = node.querySelector('.cover img');
+      if (img) decryptCover(node.dataset.cover).then((d) => { if (d) img.src = d; });
+    }
   };
   const mo = new MutationObserver((records) => {
     for (const rec of records) {
@@ -217,7 +253,6 @@ function bootCoverObserver() {
     }
   });
   mo.observe(document.body, { childList: true, subtree: true });
-  // 首屏已有的卡片也补一次
   hydrateCovers(document.body);
 }
 

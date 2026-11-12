@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>播放 · 黄果解析</title>
-<link rel="stylesheet" href="style.css?v=20261113a">
-<link rel="stylesheet" href="play.css?v=20261113a">
+<link rel="stylesheet" href="style.css?v=20261113b">
+<link rel="stylesheet" href="play.css?v=20261113b">
 </head>
 <body class="play-body">
 <header class="topbar">
@@ -75,7 +75,7 @@
 <footer>内容来自公开站点，仅作技术演示。请遵守当地法律法规与版权规则。</footer>
 
 <script src="https://huangguo-parser.13681235735.workers.dev/hls.js"></script>
-<script src="app.js?v=20261113a"></script>
+<script src="app.js?v=20261113b"></script>
 <script>
 const $=s=>document.querySelector(s);
 let hlsPlayer=null;
@@ -244,7 +244,7 @@ async function loadRelated(id){
   try{
     const d=await api('/category/ai-duanju?page=1&size=6&sort=latest');
     const list=(d.list||[]).filter(x=>String(x.vod_id)!==String(id)).slice(0,6);
-    $('#related').innerHTML=list.map(x=>`<article class="card" data-id="${esc(x.vod_id)}"><div class="cover">${x.vod_pic?`<img src="${esc(mediaUrl(x.vod_pic))}" loading="lazy" alt="${esc(x.vod_name)}">`:'<span>黄果</span>'}</div><div class="card-body"><h3>${esc(x.vod_name)}</h3><p>${esc(x.vod_remarks||'')}</p></div></article>`).join('');
+    $('#related').innerHTML=list.map(x=>`<article class="card" data-id="${esc(x.vod_id)}"><div class="cover">${x.vod_pic?imgTag(x.vod_pic,x.vod_name):'<span>黄果</span>'}</div><div class="card-body"><h3>${esc(x.vod_name)}</h3><p>${esc(x.vod_remarks||'')}</p></div></article>`).join('');
     $('#related').querySelectorAll('.card').forEach(c=>c.onclick=()=>{location.href='play.html?id='+encodeURIComponent(c.dataset.id)+'&ep=1'});
   }catch(e){$('#related').innerHTML='<div class="empty">推荐加载失败</div>'}
 }
@@ -264,7 +264,7 @@ async function init(){
     $('#player-title').textContent=x.vod_name+' · 第'+ep+'集';
     $('#desc').textContent=x.vod_desc||'暂无简介';
     $('#tags').innerHTML=(x.vod_tags||[]).map(t=>`<span>${esc(t)}</span>`).join('');
-    $('#poster').innerHTML=x.vod_pic?`<img src="${esc(mediaUrl(x.vod_pic))}" alt="${esc(x.vod_name)}">`:'<span>黄果</span>';
+    $('#poster').innerHTML=x.vod_pic?imgTag(x.vod_pic,x.vod_name):'<span>黄果</span>';
     const meta=[['类型',(x.vod_tags||[]).join(' / ')],['集数',x.vod_episode_count?x.vod_episode_count+' 集':'-'],['状态',x.vod_finished?'已完结':'连载中'],['评分',x.vod_score?x.vod_score+' 分':'-'],['年份',x.vod_year||'-'],['作者',x.vod_author||'-'],['热度',x.vod_hot?Number(x.vod_hot).toLocaleString():'-'],['更新',x.vod_created||'-']];
     $('#meta-list').innerHTML=meta.map(m=>`<div><span>${esc(m[0])}</span><b>${esc(m[1])}</b></div>`).join('');
     $('#ep-count').textContent=DATA.episodes.length+' 集';
