@@ -219,18 +219,15 @@ async function loadEpisode(ep,push){
   setPlayerStatus('正在解析第'+DATA.ep+'集…');
   setWarn('');
   $('#player-loading').style.display='';
-  const item=DATA.episodes.find(e=>String(e.ep)===DATA.ep);
-  const pageUrl=item?item.url:('https://huangguoai.com/video/'+DATA.id+'/');
   try{
-    const d=await api('/play?url='+encodeURIComponent(pageUrl)+'&ep='+DATA.ep);
+    // 播放地址只能经 Worker 取：源站加密端点拦截了 github.io 的 Origin
+    const d=await getPlay(DATA.id, DATA.ep);
     if(!d.url)throw Error('未取到播放地址');
     $('#btn-source').href=d.url;
-    const parts=[];
-    parts.push('数据源 '+(d.source==='api'?'官方接口':'页面数据'));
-    parts.push(d.preferDirect?'直连原始地址':'经代理');
+    const parts=['数据源 '+(d.source==='dx150'?'加密接口':'页面数据')];
     if(d.declaredDuration)parts.push('本集 '+fmtDur(d.declaredDuration));
     setPlayerStatus(parts.join(' · '));
-    playStream(d.url,d.proxy,false);
+    playStream(d.url, d.proxy || null, false);
   }catch(e){
     setPlayerStatus('播放地址解析失败，请换一集重试','bad');
     $('#player-loading').textContent='解析失败';
