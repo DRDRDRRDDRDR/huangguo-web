@@ -54,6 +54,27 @@ async function decryptCover(url) {
   } catch (e) { return ''; }
 }
 
+// ===== 反爬签名 =====
+// Worker 用同一密钥与算法校验，窗口 5 分钟。密钥在前端可见，
+// 目的是挡掉不执行 JS 的脚本爬虫，不是对抗有心的逆向者。
+const HG_SIG_SECRET = 'hg-dx150-2026-11-w7Qm4pLz';
+
+async function hmacHex(msg) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(HG_SIG_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg)));
+  return Array.from(sig).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 对 path+query 生成签名，必须与实际请求的 URL 完全一致
+async function signHeaders(pathWithQuery) {
+  const win = Math.floor(Date.now() / 1000 / 300);
+  const sig = await hmacHex(win + '\n' + pathWithQuery);
+  return { 'X-HG-Ts': String(win * 300), 'X-HG-Sig': sig };
+}
+
 function mediaUrl(p) {
   if (!p) return '';
   if (/^https?:\/\//i.test(p)) return p;
@@ -164,11 +185,12 @@ function gridHtml(list) {
 }
 
 async function hydrateCovers(root) {
-  const cards = Array.from(root.querySelectorAll('.card[data-cover]'));
+  const cards = Array.from(root.querySelectorAll('.card[data-cover]:not([data-cover-done])'));
   let idx = 0;
   async function runner() {
     while (idx < cards.length) {
       const card = cards[idx++];
+      card.setAttribute('data-cover-done', '1');
       const url = card.dataset.cover;
       if (!url) continue;
       const img = card.querySelector('.cover img');
@@ -178,6 +200,25 @@ async function hydrateCovers(root) {
     }
   }
   await Promise.all(Array.from({ length: 4 }, runner));
+}
+
+// 各页面直接用 insertAdjacentHTML 插卡片，不经过 fill，
+// 所以用 MutationObserver 监听整篇文档，新卡片一出现就解封面。
+function bootCoverObserver() {
+  if (typeof MutationObserver === 'undefined' || !document.body) return;
+  const scan = (node) => {
+    if (!node || node.nodeType !== 1) return;
+    if (node.classList && node.classList.contains('card')) hydrateCovers(node.parentNode || node);
+    else if (node.querySelectorAll) hydrateCovers(node);
+  };
+  const mo = new MutationObserver((records) => {
+    for (const rec of records) {
+      for (const node of rec.addedNodes) scan(node);
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  // 首屏已有的卡片也补一次
+  hydrateCovers(document.body);
 }
 
 function bindCards(el) {
@@ -398,9 +439,16 @@ function dxPacket(method, path, obj) {
 // 好在只此一步，列表、封面、m3u8、分片全部由浏览器直连。
 async function getPlay(id, ep) {
   const path = '/play?url=' + encodeURIComponent(SITE + '/video/' + id + '/') + '&ep=' + ep;
-  const r = await fetch(WORKER + '/api' + path, { headers: { 'Accept': 'application/json, text/plain, */*' } });
+  const sig = await signHeaders('/api' + path);
+  const r = await fetch(WORKER + '/api' + path, { headers: Object.assign({ 'Accept': 'application/json, text/plain, */*' }, sig) });
   if (!r.ok) throw Error('play HTTP ' + r.status);
   const d = await r.json();
   if (!d || !d.url) throw Error('无播放地址');
   return { url: d.url, proxy: d.proxy || '', hevc: d.hevc || '', source: d.source || 'worker', declaredDuration: d.declaredDuration || 0 };
+}
+
+// 页面就绪即开始监听新卡片并解封面
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootCoverObserver);
+  else bootCoverObserver();
 }
